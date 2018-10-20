@@ -25,12 +25,22 @@ namespace ImGuiFreeType
         MonoHinting     = 1 << 4,   // Strong hinting algorithm that should only be used for monochrome output.
         Bold            = 1 << 5,   // Styling: Should we artificially embolden the font?
         Oblique         = 1 << 6,   // Styling: Should we slant the font, emulating italic style?
-        Monochrome      = 1 << 7    // Disable anti-aliasing. Combine this with MonoHinting for best results!
+        LCD             = 1 << 7,   // Light hinting optimised for LCD displays
+        LCD_V           = 1 << 8,   // Light hinting optimised for vertical LCD displays
     };
 
-    IMGUI_API bool BuildFontAtlas(ImFontAtlas* atlas, unsigned int extra_flags = 0);
+    enum SubpixelAAFlags
+    {
+        DEFAULT = 0,
+        LEGACY = 1,
+        LIGHT = 2,
+        NONE = 3,
+        DISABLE_SUBPIXEL_AA = 4,
+    };
 
     // By default ImGuiFreeType will use IM_ALLOC()/IM_FREE().
+    IMGUI_API bool BuildFontAtlas(ImFontAtlas* atlas, unsigned int extra_flags, unsigned int subpixel_flags);
+
     // However, as FreeType does lots of allocations we provide a way for the user to redirect it to a separate memory heap if desired:
     IMGUI_API void SetAllocatorFunctions(void* (*alloc_func)(size_t sz, void* user_data), void (*free_func)(void* ptr, void* user_data), void* user_data = NULL);
 }

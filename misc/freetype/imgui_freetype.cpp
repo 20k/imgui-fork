@@ -30,6 +30,7 @@
 #include FT_MODULE_H            // <freetype/ftmodapi.h>
 #include FT_GLYPH_H             // <freetype/ftglyph.h>
 #include FT_SYNTHESIS_H         // <freetype/ftsynth.h>
+#include <freetype/ftlcdfil.h>
 
 #ifdef _MSC_VER
 #pragma warning (disable: 4505) // unreferenced local function has been removed (stb stuff)
@@ -39,6 +40,8 @@
 #pragma GCC diagnostic ignored "-Wpragmas"                  // warning: unknown option after '#pragma GCC diagnostic' kind
 #pragma GCC diagnostic ignored "-Wunused-function"          // warning: 'xxxx' defined but not used
 #endif
+
+void imgui_postprocess(uint32_t* ptr, ImFontAtlas* atlas);
 
 namespace
 {
@@ -102,8 +105,8 @@ namespace
         void                    CloseFont();
         void                    SetPixelHeight(int pixel_height); // Change font pixel size. All following calls to RasterizeGlyph() will use this size
         const FT_Glyph_Metrics* LoadGlyph(uint32_t in_codepoint);
-        const FT_Bitmap*        RenderGlyphAndGetInfo(GlyphInfo* out_glyph_info);
-        void                    BlitGlyph(const FT_Bitmap* ft_bitmap, uint8_t* dst, uint32_t dst_pitch, unsigned char* multiply_table = NULL);
+        const FT_Bitmap*        RenderGlyphAndGetInfo(GlyphInfo* out_glyph_info, bool use_subpixel_aa);
+        void                    BlitGlyph(const FT_Bitmap* ft_bitmap, uint8_t* const dst, uint32_t dst_pitch, unsigned char* multiply_table, bool use_subpixel_aa, uint8_t* rgba32_out);
         ~FreeTypeFont()         { CloseFont(); }
 
         // [Internals]
@@ -142,13 +145,12 @@ namespace
             LoadFlags |= FT_LOAD_TARGET_LIGHT;
         else if (UserFlags & ImGuiFreeType::MonoHinting)
             LoadFlags |= FT_LOAD_TARGET_MONO;
+        else if (UserFlags & ImGuiFreeType::LCD)
+            LoadFlags |= FT_LOAD_TARGET_LCD;
+        else if (UserFlags & ImGuiFreeType::LCD_V)
+            LoadFlags |= FT_LOAD_TARGET_LCD_V;
         else
             LoadFlags |= FT_LOAD_TARGET_NORMAL;
-
-        if (UserFlags & ImGuiFreeType::Monochrome)
-            RenderMode = FT_RENDER_MODE_MONO;
-        else
-            RenderMode = FT_RENDER_MODE_NORMAL;
 
         return true;
     }
@@ -213,10 +215,16 @@ namespace
         return &slot->metrics;
     }
 
-    const FT_Bitmap* FreeTypeFont::RenderGlyphAndGetInfo(GlyphInfo* out_glyph_info)
+    const FT_Bitmap* FreeTypeFont::RenderGlyphAndGetInfo(GlyphInfo* out_glyph_info, bool use_subpixel_aa)
     {
         FT_GlyphSlot slot = Face->glyph;
-        FT_Error error = FT_Render_Glyph(slot, RenderMode);
+        FT_Error error;
+
+        if(!use_subpixel_aa)
+            error = FT_Render_Glyph(slot, FT_RENDER_MODE_NORMAL);
+        else
+            error = FT_Render_Glyph(slot, FT_RENDER_MODE_LCD);
+
         if (error != 0)
             return NULL;
 
@@ -227,53 +235,81 @@ namespace
         out_glyph_info->OffsetY = -Face->glyph->bitmap_top;
         out_glyph_info->AdvanceX = (float)FT_CEIL(slot->advance.x);
 
+        if(use_subpixel_aa)
+            out_glyph_info->Width /= 3;
+
         return ft_bitmap;
     }
 
-    void FreeTypeFont::BlitGlyph(const FT_Bitmap* ft_bitmap, uint8_t* dst, uint32_t dst_pitch, unsigned char* multiply_table)
+    void FreeTypeFont::BlitGlyph(const FT_Bitmap* ft_bitmap, uint8_t* const dst, uint32_t dst_pitch, unsigned char* multiply_table, bool use_subpixel_aa, uint8_t* rgba32_out)
     {
         IM_ASSERT(ft_bitmap != NULL);
         const uint32_t w = ft_bitmap->width;
         const uint32_t h = ft_bitmap->rows;
-        const uint8_t* src = ft_bitmap->buffer;
+        const uint8_t* const src = ft_bitmap->buffer;
         const uint32_t src_pitch = ft_bitmap->pitch;
 
-        switch (ft_bitmap->pixel_mode)
+        if(use_subpixel_aa)
+            assert(ft_bitmap->pixel_mode == FT_PIXEL_MODE_LCD);
+
+        if (multiply_table == NULL)
         {
-        case FT_PIXEL_MODE_GRAY: // Grayscale image, 1 byte per pixel.
+            const uint8_t* mut_src = src;
+            uint8_t* mut_dst = dst;
+
+            if(!use_subpixel_aa)
             {
-                if (multiply_table == NULL)
-                {
-                    for (uint32_t y = 0; y < h; y++, src += src_pitch, dst += dst_pitch)
-                        memcpy(dst, src, w);
-                }
-                else
-                {
-                    for (uint32_t y = 0; y < h; y++, src += src_pitch, dst += dst_pitch)
-                        for (uint32_t x = 0; x < w; x++)
-                            dst[x] = multiply_table[src[x]];
-                }
-                break;
+                for (uint32_t y = 0; y < h; y++, mut_src += src_pitch, mut_dst += dst_pitch)
+                    memcpy(mut_dst, mut_src, w);
             }
-        case FT_PIXEL_MODE_MONO: // Monochrome image, 1 bit per pixel. The bits in each byte are ordered from MSB to LSB.
+            else
             {
-                uint8_t color0 = multiply_table ? multiply_table[0] : 0;
-                uint8_t color1 = multiply_table ? multiply_table[255] : 255;
-                for (uint32_t y = 0; y < h; y++, src += src_pitch, dst += dst_pitch)
+                for(uint32_t y=0; y < h; y++)
                 {
-                    uint8_t bits = 0;
-                    const uint8_t* bits_ptr = src;
-                    for (uint32_t x = 0; x < w; x++, bits <<= 1)
+                    for(uint32_t x=0; x < w/3; x++)
                     {
-                        if ((x & 7) == 0)
-                            bits = *bits_ptr++;
-                        dst[x] = (bits & 0x80) ? color1 : color0;
+                        mut_dst[y * dst_pitch + x] = (mut_src[y * src_pitch + x*3 + 0] + mut_src[y * src_pitch + x*3 + 1] + mut_src[y * src_pitch + x*3 + 2]) / 3;
                     }
                 }
-                break;
             }
-        default:
-            IM_ASSERT(0 && "FreeTypeFont::BlitGlyph(): Unknown bitmap pixel mode!");
+        }
+        /*else
+        {
+            const uint8_t* mut_src = src;
+            uint8_t* mut_dst = dst;
+
+            for (uint32_t y = 0; y < h; y++, mut_src += src_pitch, mut_dst += dst_pitch)
+                for (uint32_t x = 0; x < w; x++)
+                    mut_dst[x] = multiply_table[mut_src[x]];
+        }*/
+
+        assert(multiply_table == nullptr);
+
+        if(use_subpixel_aa)
+        {
+            for(uint32_t y=0; y < h; y++)
+            {
+                for(uint32_t x=0; x < w/3; x++)
+                {
+                    rgba32_out[((y) * dst_pitch + x) * 4 + 0] = src[y * src_pitch + x*3 + 0];
+                    rgba32_out[((y) * dst_pitch + x) * 4 + 1] = src[y * src_pitch + x*3 + 1];
+                    rgba32_out[((y) * dst_pitch + x) * 4 + 2] = src[y * src_pitch + x*3 + 2];
+                    rgba32_out[((y) * dst_pitch + x) * 4 + 3] = 255;
+                }
+            }
+        }
+        else
+        {
+            for(uint32_t y=0; y < h; y++)
+            {
+                for(uint32_t x=0; x < w; x++)
+                {
+                    rgba32_out[((y) * dst_pitch + x) * 4 + 0] = 255;
+                    rgba32_out[((y) * dst_pitch + x) * 4 + 1] = 255;
+                    rgba32_out[((y) * dst_pitch + x) * 4 + 2] = 255;
+                    rgba32_out[((y) * dst_pitch + x) * 4 + 3] = src[y * src_pitch + x];
+                }
+            }
         }
     }
 }
@@ -290,6 +326,7 @@ struct ImFontBuildSrcGlyphFT
     GlyphInfo           Info;
     uint32_t            Codepoint;
     unsigned char*      BitmapData;         // Point within one of the dst_tmp_bitmap_buffers[] array
+    unsigned char*      Rgba32BitmapData;
 };
 
 struct ImFontBuildSrcDataFT
@@ -313,9 +350,11 @@ struct ImFontBuildDstDataFT
     ImBoolVector        GlyphsSet;          // This is used to resolve collision when multiple sources are merged into a same destination font.
 };
 
-bool ImFontAtlasBuildWithFreeType(FT_Library ft_library, ImFontAtlas* atlas, unsigned int extra_flags)
+bool ImFontAtlasBuildWithFreeType(FT_Library ft_library, ImFontAtlas* atlas, unsigned int extra_flags, bool use_subpixel_aa)
 {
     IM_ASSERT(atlas->ConfigData.Size > 0);
+
+    atlas->TexGlyphPadding = 5;
 
     ImFontAtlasBuildRegisterDefaultCustomRects(atlas);
 
@@ -466,11 +505,14 @@ bool ImFontAtlasBuildWithFreeType(FT_Library ft_library, ImFontAtlas* atlas, uns
                 continue;
 
             // Render glyph into a bitmap (currently held by FreeType)
-            const FT_Bitmap* ft_bitmap = src_tmp.Font.RenderGlyphAndGetInfo(&src_glyph.Info);
+            const FT_Bitmap* ft_bitmap = src_tmp.Font.RenderGlyphAndGetInfo(&src_glyph.Info, use_subpixel_aa);
             IM_ASSERT(ft_bitmap);
 
+            const int bitmap_rgba8 = src_glyph.Info.Width * src_glyph.Info.Height;
+            const int bitmap_rgba32 = src_glyph.Info.Width * src_glyph.Info.Height * 4;
+
             // Allocate new temporary chunk if needed
-            const int bitmap_size_in_bytes = src_glyph.Info.Width * src_glyph.Info.Height;
+            const int bitmap_size_in_bytes =  bitmap_rgba8 + bitmap_rgba32;
             if (buf_bitmap_current_used_bytes + bitmap_size_in_bytes > BITMAP_BUFFERS_CHUNK_SIZE)
             {
                 buf_bitmap_current_used_bytes = 0;
@@ -479,8 +521,13 @@ bool ImFontAtlasBuildWithFreeType(FT_Library ft_library, ImFontAtlas* atlas, uns
 
             // Blit rasterized pixels to our temporary buffer and keep a pointer to it.
             src_glyph.BitmapData = buf_bitmap_buffers.back() + buf_bitmap_current_used_bytes;
-            buf_bitmap_current_used_bytes += bitmap_size_in_bytes;
-            src_tmp.Font.BlitGlyph(ft_bitmap, src_glyph.BitmapData, src_glyph.Info.Width * 1, multiply_enabled ? multiply_table : NULL);
+            buf_bitmap_current_used_bytes += bitmap_rgba8;
+
+            src_glyph.Rgba32BitmapData = buf_bitmap_buffers.back() + buf_bitmap_current_used_bytes;
+            buf_bitmap_current_used_bytes += bitmap_rgba32;
+
+            // Blit either 8 bit gray or 32bit rgba to glyph
+            src_tmp.Font.BlitGlyph(ft_bitmap, src_glyph.BitmapData, src_glyph.Info.Width, multiply_enabled ? multiply_table : NULL, use_subpixel_aa, src_glyph.Rgba32BitmapData);
 
             src_tmp.Rects[glyph_i].w = (stbrp_coord)(src_glyph.Info.Width + padding);
             src_tmp.Rects[glyph_i].h = (stbrp_coord)(src_glyph.Info.Height + padding);
@@ -524,11 +571,16 @@ bool ImFontAtlasBuildWithFreeType(FT_Library ft_library, ImFontAtlas* atlas, uns
                 atlas->TexHeight = ImMax(atlas->TexHeight, src_tmp.Rects[glyph_i].y + src_tmp.Rects[glyph_i].h);
     }
 
+    uint8_t* old_8bit_pointer = nullptr;
+
     // 7. Allocate texture
     atlas->TexHeight = (atlas->Flags & ImFontAtlasFlags_NoPowerOfTwoHeight) ? (atlas->TexHeight + 1) : ImUpperPowerOfTwo(atlas->TexHeight);
     atlas->TexUvScale = ImVec2(1.0f / atlas->TexWidth, 1.0f / atlas->TexHeight);
-    atlas->TexPixelsAlpha8 = (unsigned char*)IM_ALLOC(atlas->TexWidth * atlas->TexHeight);
-    memset(atlas->TexPixelsAlpha8, 0, atlas->TexWidth * atlas->TexHeight);
+    old_8bit_pointer = (unsigned char*)ImGui::MemAlloc(atlas->TexWidth * atlas->TexHeight);
+    memset(old_8bit_pointer, 0, atlas->TexWidth * atlas->TexHeight);
+
+    atlas->TexPixelsNewRGBA32 = (uint32_t*)IM_ALLOC(atlas->TexWidth * atlas->TexHeight * 4);
+    memset(atlas->TexPixelsNewRGBA32, 0, atlas->TexWidth * atlas->TexHeight * 4);
 
     // 8. Copy rasterized font characters back into the main texture
     // 9. Setup ImFont and glyphs for runtime
@@ -564,9 +616,34 @@ bool ImFontAtlasBuildWithFreeType(FT_Library ft_library, ImFontAtlas* atlas, uns
             size_t blit_src_stride = (size_t)src_glyph.Info.Width;
             size_t blit_dst_stride = (size_t)atlas->TexWidth;
             unsigned char* blit_src = src_glyph.BitmapData;
-            unsigned char* blit_dst = atlas->TexPixelsAlpha8 + (ty * blit_dst_stride) + tx;
+            unsigned char* blit_dst = old_8bit_pointer + (ty * blit_dst_stride) + tx;
+
             for (int y = info.Height; y > 0; y--, blit_dst += blit_dst_stride, blit_src += blit_src_stride)
                 memcpy(blit_dst, blit_src, blit_src_stride);
+
+            //if(use_subpixel_aa)
+            {
+                for(int y=0; y < (int)info.Height; y++)
+                {
+                    for(int x=0; x < (int)info.Width; x++)
+                    {
+                        uint32_t base_index = (y * src_glyph.Info.Width + x) * 4;
+                        uint32_t atlas_index = ((y + ty) * atlas->TexWidth + x + tx);
+
+                        assert(atlas_index < (atlas->TexWidth * atlas->TexHeight));
+
+                        /*atlas->TexPixelsNewRGBA32[atlas_index + 0] = src_glyph.Rgba32BitmapData[base_index + 0];
+                        atlas->TexPixelsNewRGBA32[atlas_index + 1] = src_glyph.Rgba32BitmapData[base_index + 1];
+                        atlas->TexPixelsNewRGBA32[atlas_index + 2] = src_glyph.Rgba32BitmapData[base_index + 2];
+                        atlas->TexPixelsNewRGBA32[atlas_index + 3] = src_glyph.Rgba32BitmapData[base_index + 3];*/
+
+                        atlas->TexPixelsNewRGBA32[atlas_index] = IM_COL32(src_glyph.Rgba32BitmapData[base_index + 0],
+                                                                          src_glyph.Rgba32BitmapData[base_index + 1],
+                                                                          src_glyph.Rgba32BitmapData[base_index + 2],
+                                                                          src_glyph.Rgba32BitmapData[base_index + 3]);
+                    }
+                }
+            }
 
             float char_advance_x_org = info.AdvanceX;
             float char_advance_x_mod = ImClamp(char_advance_x_org, cfg.GlyphMinAdvanceX, cfg.GlyphMaxAdvanceX);
@@ -643,7 +720,7 @@ static void* FreeType_Realloc(FT_Memory /*memory*/, long cur_size, long new_size
     return block;
 }
 
-bool ImGuiFreeType::BuildFontAtlas(ImFontAtlas* atlas, unsigned int extra_flags)
+bool ImGuiFreeType::BuildFontAtlas(ImFontAtlas* atlas, unsigned int extra_flags, unsigned int subpixel_flags)
 {
     // FreeType memory management: https://www.freetype.org/freetype2/docs/design/design-4.html
     FT_MemoryRec_ memory_rec = {};
@@ -661,8 +738,38 @@ bool ImGuiFreeType::BuildFontAtlas(ImFontAtlas* atlas, unsigned int extra_flags)
     // If you don't call FT_Add_Default_Modules() the rest of code may work, but FreeType won't use our custom allocator.
     FT_Add_Default_Modules(ft_library);
 
-    bool ret = ImFontAtlasBuildWithFreeType(ft_library, atlas, extra_flags);
+    FT_LcdFilter_ ft_filter_flags = FT_LCD_FILTER_NONE;
+
+    if(subpixel_flags == ImGuiFreeType::DEFAULT)
+        ft_filter_flags = FT_LCD_FILTER_DEFAULT;
+
+    if(subpixel_flags == ImGuiFreeType::LEGACY)
+        ft_filter_flags = FT_LCD_FILTER_LEGACY;
+
+    if(subpixel_flags == ImGuiFreeType::LIGHT)
+        ft_filter_flags = FT_LCD_FILTER_LIGHT;
+
+    if(subpixel_flags == ImGuiFreeType::NONE)
+        ft_filter_flags = FT_LCD_FILTER_NONE;
+
+    bool use_subpixel_aa = false;
+
+    if(subpixel_flags != ImGuiFreeType::DISABLE_SUBPIXEL_AA)
+    {
+        if(FT_Library_SetLcdFilter(ft_library, ft_filter_flags) != 0)
+            return false;
+
+        use_subpixel_aa = true;
+    }
+    else
+    {
+        use_subpixel_aa = false;
+    }
+
+    bool ret = ImFontAtlasBuildWithFreeType(ft_library, atlas, extra_flags, use_subpixel_aa);
     FT_Done_Library(ft_library);
+
+    atlas->IsSubpixelFont = use_subpixel_aa;
 
     return ret;
 }
@@ -673,3 +780,24 @@ void ImGuiFreeType::SetAllocatorFunctions(void* (*alloc_func)(size_t sz, void* u
     GImFreeTypeFreeFunc = free_func;
     GImFreeTypeAllocatorUserData = user_data;
 }
+
+/*void imgui_postprocess(uint32_t* ptr, ImFontAtlas* atlas)
+{
+    ImFontAtlas::CustomRect& r = atlas->CustomRects[atlas->CustomRectIds[0]];
+
+    const char* pixels = ImFontAtlasGetDefaultTexDataPixels();
+
+    const int w = atlas->TexWidth;
+
+    int data_whalf = (r.Width - 1) / 2;
+    int data_h = r.Height;
+
+    for (int y = 0, n = 0; y < data_h; y++)
+        for (int x = 0; x < data_whalf; x++, n++)
+        {
+            const int offset0 = (int)(r.X + x) + (int)(r.Y + y) * w;
+            const int offset1 = offset0 + data_whalf + 1;
+            ptr[offset0] = pixels[n] == '.' ? IM_COL32(0xFF, 0xFF, 0xFF, 0xFF) : IM_COL32(0x00, 0x00, 0x00, 0x00);
+            ptr[offset1] = pixels[n] == 'X' ? IM_COL32(0xFF, 0xFF, 0xFF, 0xFF) : IM_COL32(0x00, 0x00, 0x00, 0x00);
+        }
+}*/

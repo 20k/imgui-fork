@@ -1914,6 +1914,24 @@ const ImVec4& ImGui::GetStyleColorVec4(ImGuiCol idx)
     return style.Colors[idx];
 }
 
+ImVec4 ImGui::GetLinearStyleColorVec4(ImGuiCol idx)
+{
+    ImGuiStyle& style = GImGui->Style;
+    if(GImGui->IsLinearColor)
+        return style.Colors[idx];
+    else
+        return SrgbToLinear(style.Colors[idx]);
+}
+
+ImVec4 ImGui::GetSrgbStyleColorVec4(ImGuiCol idx)
+{
+    ImGuiStyle& style = GImGui->Style;
+    if(GImGui->IsLinearColor)
+        return LinearToSrgb(style.Colors[idx]);
+    else
+        return style.Colors[idx];
+}
+
 ImU32 ImGui::GetColorU32(ImU32 col)
 {
     float style_alpha = GImGui->Style.Alpha;
@@ -6309,6 +6327,69 @@ void ImGui::PopTextWrapPos()
     window->DC.TextWrapPos = window->DC.TextWrapPosStack.empty() ? -1.0f : window->DC.TextWrapPosStack.back();
 }
 
+float ImGui::SrgbToLinear(float in)
+{
+    if(in <= 0.04045)
+        return in / 12.92;
+    else
+        return pow((in + 0.055) / 1.055, 2.4);
+}
+
+float ImGui::LinearToSrgb(float C_lin)
+{
+    if (C_lin <= 0.0031308)
+        return C_lin * 12.92;
+    else
+        return 1.055 * pow(C_lin, 1.0 / 2.4) - 0.055;
+}
+
+ImVec4 ImGui::SrgbToLinear(ImVec4 col)
+{
+    col.x = SrgbToLinear(col.x);
+    col.y = SrgbToLinear(col.y);
+    col.z = SrgbToLinear(col.z);
+
+    return col;
+}
+
+ImVec4 ImGui::LinearToSrgb(ImVec4 col)
+{
+    col.x = LinearToSrgb(col.x);
+    col.y = LinearToSrgb(col.y);
+    col.z = LinearToSrgb(col.z);
+
+    return col;
+}
+
+void ImGui::SetStyleLinearColor(bool is_linear)
+{
+    ImGuiContext& g = *ImGui::GetCurrentContext();
+
+    if(is_linear == g.IsLinearColor)
+        return;
+
+    ///THIS IS PRETTY HACKY
+    ///if you toggle the setting loads you'll lose precision
+    ///this is fine because i expect that people won't toggle it a lot but still
+    ///there could be a much better solution here
+    for(int i=0; i < ImGuiCol_COUNT; i++)
+    {
+        ImVec4& col = g.Style.Colors[i];
+
+        if(is_linear)
+            col = SrgbToLinear(col);
+        else
+            col = LinearToSrgb(col);
+    }
+
+    g.IsLinearColor = is_linear;
+}
+
+bool ImGui::IsStyleLinearColor()
+{
+    return ImGui::GetCurrentContext()->IsLinearColor;
+}
+
 // FIXME: This may incur a round-trip (if the end user got their data from a float4) but eventually we aim to store the in-flight colors as ImU32
 void ImGui::PushStyleColor(ImGuiCol idx, ImU32 col)
 {
@@ -6317,6 +6398,7 @@ void ImGui::PushStyleColor(ImGuiCol idx, ImU32 col)
     backup.Col = idx;
     backup.BackupValue = g.Style.Colors[idx];
     g.ColorModifiers.push_back(backup);
+
     g.Style.Colors[idx] = ColorConvertU32ToFloat4(col);
 }
 
@@ -6327,7 +6409,44 @@ void ImGui::PushStyleColor(ImGuiCol idx, const ImVec4& col)
     backup.Col = idx;
     backup.BackupValue = g.Style.Colors[idx];
     g.ColorModifiers.push_back(backup);
+
     g.Style.Colors[idx] = col;
+}
+
+void ImGui::PushSrgbStyleColor(ImGuiCol idx, ImU32 col)
+{
+    ImGuiContext& g = *GImGui;
+    if(g.IsLinearColor)
+        PushStyleColor(idx, SrgbToLinear(ColorConvertU32ToFloat4(col)));
+    else
+        PushStyleColor(idx, col);
+}
+
+void ImGui::PushSrgbStyleColor(ImGuiCol idx, const ImVec4& col)
+{
+    ImGuiContext& g = *GImGui;
+    if(g.IsLinearColor)
+        PushStyleColor(idx, SrgbToLinear(col));
+    else
+        PushStyleColor(idx, col);
+}
+
+void ImGui::PushLinearStyleColor(ImGuiCol idx, ImU32 col)
+{
+    ImGuiContext& g = *GImGui;
+    if(g.IsLinearColor)
+        PushStyleColor(idx, ColorConvertU32ToFloat4(col));
+    else
+        PushStyleColor(idx, LinearToSrgb(ColorConvertU32ToFloat4(col)));
+}
+
+void ImGui::PushLinearStyleColor(ImGuiCol idx, const ImVec4& col)
+{
+    ImGuiContext& g = *GImGui;
+    if(g.IsLinearColor)
+        PushStyleColor(idx, col);
+    else
+        PushStyleColor(idx, LinearToSrgb(col));
 }
 
 void ImGui::PopStyleColor(int count)

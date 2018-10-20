@@ -866,6 +866,8 @@ struct ImGuiContext
     float                   FontSize;                           // (Shortcut) == FontBaseSize * g.CurrentWindow->FontWindowScale == window->FontSize(). Text height for current window.
     float                   FontBaseSize;                       // (Shortcut) == IO.FontGlobalScale * Font->Scale * Font->FontSize. Base text height.
     ImDrawListSharedData    DrawListSharedData;
+    bool                    IsLinearColor;
+
     double                  Time;
     int                     FrameCount;
     int                     FrameCountEnded;
@@ -1066,6 +1068,8 @@ struct ImGuiContext
         FontSize = FontBaseSize = 0.0f;
         FontAtlasOwnedByContext = shared_font_atlas ? false : true;
         IO.Fonts = shared_font_atlas ? shared_font_atlas : IM_NEW(ImFontAtlas)();
+        IsLinearColor = false;
+
         Time = 0.0f;
         FrameCount = 0;
         FrameCountEnded = FrameCountRendered = -1;
@@ -1707,6 +1711,10 @@ IMGUI_API void              ImFontAtlasBuildFinish(ImFontAtlas* atlas);
 IMGUI_API void              ImFontAtlasBuildMultiplyCalcLookupTable(unsigned char out_table[256], float in_multiply_factor);
 IMGUI_API void              ImFontAtlasBuildMultiplyRectAlpha8(const unsigned char table[256], unsigned char* pixels, int x, int y, int w, int h, int stride);
 
+extern const int FONT_ATLAS_DEFAULT_TEX_DATA_W_HALF;
+extern const int FONT_ATLAS_DEFAULT_TEX_DATA_H;
+
+IMGUI_API const char*       ImFontAtlasGetDefaultTexDataPixels();
 // Debug Tools
 // Use 'Metrics->Tools->Item Picker' to break into the call-stack of a specific item.
 #ifndef IM_DEBUG_BREAK      
