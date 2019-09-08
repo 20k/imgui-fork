@@ -66,6 +66,7 @@
 #endif
 
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "imgui_impl_opengl3.h"
 #include <stdio.h>
 #if defined(_MSC_VER) && _MSC_VER <= 1500 // MSVC 2008 or earlier
@@ -290,6 +291,9 @@ void    ImGui_ImplOpenGL3_RenderDrawData(ImDrawData* draw_data)
     bool rgb_blend = false;
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
+    if(ImGui::GetCurrentContext()->IsLinearColor)
+        glEnable(GL_FRAMEBUFFER_SRGB);
+
     // Render command lists
     for(int n = 0; n < draw_data->CmdListsCount; n++)
     {
@@ -357,6 +361,9 @@ void    ImGui_ImplOpenGL3_RenderDrawData(ImDrawData* draw_data)
             }
         }
     }
+
+    if(ImGui::GetCurrentContext()->IsLinearColor)
+        glDisable(GL_FRAMEBUFFER_SRGB);
 
     // Destroy the temporary VAO
 #ifndef IMGUI_IMPL_OPENGL_ES2
