@@ -554,6 +554,20 @@ bool    ImGui_ImplOpenGL3_CreateDeviceObjects()
         "    gl_FragColor = Frag_Color * texture2D(Texture, Frag_UV.st);\n"
         "}\n";
 
+    #ifdef SUBPIXEL_FONT_RENDERING
+    const GLchar* fragment_shader_glsl_130 =
+        "uniform sampler2D Texture;\n"
+        "in vec2 Frag_UV;\n"
+        "in vec4 Frag_Color;\n"
+        "out vec4 Out_Color_0;\n"
+        "out vec4 Out_Color_1;\n"
+        "void main()\n"
+        "{\n"
+        "   vec4 tex_col4 = texture(Texture, Frag_UV.st);\n"
+        "   Out_Color_0 = Frag_Color * tex_col4;\n"
+        "   Out_Color_1 = 1 - tex_col4;\n"
+        "}\n";
+    #else
     const GLchar* fragment_shader_glsl_130 =
         "uniform sampler2D Texture;\n"
         "in vec2 Frag_UV;\n"
@@ -563,6 +577,7 @@ bool    ImGui_ImplOpenGL3_CreateDeviceObjects()
         "{\n"
         "    Out_Color = Frag_Color * texture(Texture, Frag_UV.st);\n"
         "}\n";
+    #endif // SUBPIXEL_FONT_RENDERING
 
     const GLchar* fragment_shader_glsl_300_es =
         "precision mediump float;\n"
