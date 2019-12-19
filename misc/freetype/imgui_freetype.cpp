@@ -30,7 +30,14 @@
 #include FT_MODULE_H            // <freetype/ftmodapi.h>
 #include FT_GLYPH_H             // <freetype/ftglyph.h>
 #include FT_SYNTHESIS_H         // <freetype/ftsynth.h>
+
+#ifdef __EMSCRIPTEN__
+#define NO_SUBPIXEL_AA
+#endif // __EMSCRIPTEN__
+
+#ifndef NO_SUBPIXEL_AA
 #include <freetype/ftlcdfil.h>
+#endif // NO_SUBPIXEL_AA
 
 #ifdef _MSC_VER
 #pragma warning (disable: 4505) // unreferenced local function has been removed (stb stuff)
@@ -738,6 +745,7 @@ bool ImGuiFreeType::BuildFontAtlas(ImFontAtlas* atlas, unsigned int extra_flags,
     // If you don't call FT_Add_Default_Modules() the rest of code may work, but FreeType won't use our custom allocator.
     FT_Add_Default_Modules(ft_library);
 
+    #ifndef NO_SUBPIXEL_AA
     FT_LcdFilter_ ft_filter_flags = FT_LCD_FILTER_NONE;
 
     if(subpixel_flags == ImGuiFreeType::DEFAULT)
@@ -765,6 +773,9 @@ bool ImGuiFreeType::BuildFontAtlas(ImFontAtlas* atlas, unsigned int extra_flags,
     {
         use_subpixel_aa = false;
     }
+    #else
+    bool use_subpixel_aa = false;
+    #endif
 
     bool ret = ImFontAtlasBuildWithFreeType(ft_library, atlas, extra_flags, use_subpixel_aa);
     FT_Done_Library(ft_library);
