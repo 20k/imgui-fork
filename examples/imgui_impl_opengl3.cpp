@@ -78,6 +78,10 @@
 #include "TargetConditionals.h"
 #endif
 
+#ifdef __EMSCRIPTEN__
+#undef SUBPIXEL_FONT_RENDERING
+#endif // __EMSCRIPTEN__
+
 // Auto-detect GL version
 #if !defined(IMGUI_IMPL_OPENGL_ES2) && !defined(IMGUI_IMPL_OPENGL_ES3)
 #if (defined(__APPLE__) && (TARGET_OS_IOS || TARGET_OS_TV)) || (defined(__ANDROID__))
@@ -291,8 +295,10 @@ void    ImGui_ImplOpenGL3_RenderDrawData(ImDrawData* draw_data)
     bool rgb_blend = false;
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
+    #ifndef __EMSCRIPTEN__
     if(ImGui::GetCurrentContext()->IsLinearColor)
         glEnable(GL_FRAMEBUFFER_SRGB);
+    #endif // __EMSCRIPTEN__
 
     // Render command lists
     for(int n = 0; n < draw_data->CmdListsCount; n++)
@@ -362,8 +368,10 @@ void    ImGui_ImplOpenGL3_RenderDrawData(ImDrawData* draw_data)
         }
     }
 
+    #ifndef __EMSCRIPTEN__
     if(ImGui::GetCurrentContext()->IsLinearColor)
         glDisable(GL_FRAMEBUFFER_SRGB);
+    #endif // __EMSCRIPTEN__
 
     // Destroy the temporary VAO
 #ifndef IMGUI_IMPL_OPENGL_ES2
