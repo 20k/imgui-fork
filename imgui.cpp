@@ -7040,6 +7040,11 @@ void ImGui::SetStyleLinearColor(bool is_linear)
     }
 
     g.IsLinearColor = is_linear;
+
+    if(is_linear)
+        ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_IsSRGB;
+    else
+        ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_IsSRGB;
 }
 
 bool ImGui::IsStyleLinearColor()
