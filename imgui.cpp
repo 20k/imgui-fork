@@ -6922,6 +6922,7 @@ void ImGui::PushFont(ImFont* font)
     SetCurrentFont(font);
     g.FontStack.push_back(font);
     g.CurrentWindow->DrawList->PushTextureID(font->ContainerAtlas->TexID);
+    g.CurrentWindow->DrawList->AddDrawCmd();
 }
 
 void  ImGui::PopFont()
@@ -6930,6 +6931,7 @@ void  ImGui::PopFont()
     g.CurrentWindow->DrawList->PopTextureID();
     g.FontStack.pop_back();
     SetCurrentFont(g.FontStack.empty() ? GetDefaultFont() : g.FontStack.back());
+    g.CurrentWindow->DrawList->AddDrawCmd();
 }
 
 void ImGui::PushItemFlag(ImGuiItemFlags option, bool enabled)
