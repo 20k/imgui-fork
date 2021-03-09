@@ -1976,6 +1976,7 @@ ImFontAtlas::ImFontAtlas()
     memset(this, 0, sizeof(*this));
     TexGlyphPadding = 1;
     PackIdMouseCursors = PackIdLines = -1;
+    IsSubpixelFont = false;
 }
 
 ImFontAtlas::~ImFontAtlas()
@@ -2034,11 +2035,56 @@ void    ImFontAtlas::Clear()
     ClearFonts();
 }
 
+// https://en.wikipedia.org/wiki/Relative_luminance
+float   GetRelativeLuminanceFromLinearRGB(ImVec4 linear)
+{
+    return 0.2126 * linear.x + 0.7152 * linear.y + 0.0722 * linear.z;
+}
+
 void    ImFontAtlas::GetTexDataAsAlpha8(unsigned char** out_pixels, int* out_width, int* out_height, int* out_bytes_per_pixel)
 {
-    // Build atlas on demand
-    if (TexPixelsAlpha8 == NULL)
-        Build();
+    // Need to reconstruct 8 bit alpha depending on current font mode
+    if(TexPixelsAlpha8 == NULL)
+    {
+        TexPixelsAlpha8 = (unsigned char*)ImGui::MemAlloc((size_t)TexWidth * (size_t)TexHeight);
+
+        unsigned int* pixels = NULL;
+        GetTexDataAsRGBA32((unsigned char**)&pixels, NULL, NULL);
+
+        // rgba32, rgb are coverage, a ignored
+        if(IsSubpixelFont)
+        {
+            for(int y=0; y < TexHeight; y++)
+            {
+                for(int x=0; x < TexWidth; x++)
+                {
+                    // Freetype outputs linear color data for coverage, so GetTexDataAsRGBA32 is in linear space here
+                    ImVec4 coverage = ImGui::ColorConvertU32ToFloat4(pixels[y * TexWidth + x]);
+
+                    float luminance = GetRelativeLuminanceFromLinearRGB(coverage);
+
+                    luminance = ImClamp(luminance, 0.f, 1.f);
+
+                    TexPixelsAlpha8[y * TexWidth + x] = luminance * 255.f;
+                }
+            }
+        }
+        // alpha8, a is brightness
+        else
+        {
+            for(int y=0; y < TexHeight; y++)
+            {
+                for(int x=0; x < TexWidth; x++)
+                {
+                    // Assuming that stb_ outputs linear color data
+                    // This passes along just the alpha value, it would be possible to use
+                    // RGB data here as well and calculate luminance, except that nothing in imgui uses it currently
+                    unsigned char alpha = ((pixels[y * TexWidth + x] >> IM_COL32_A_SHIFT) & 0xFF);
+
+                    TexPixelsAlpha8[y * TexWidth + x] = alpha;
+                }
+            }
+        }
 
     *out_pixels = TexPixelsAlpha8;
     if (out_width) *out_width = TexWidth;
@@ -2046,22 +2092,16 @@ void    ImFontAtlas::GetTexDataAsAlpha8(unsigned char** out_pixels, int* out_wid
     if (out_bytes_per_pixel) *out_bytes_per_pixel = 1;
 }
 
+
 void    ImFontAtlas::GetTexDataAsRGBA32(unsigned char** out_pixels, int* out_width, int* out_height, int* out_bytes_per_pixel)
 {
-    // Convert to RGBA32 format on demand
-    // Although it is likely to be the most commonly used format, our font rendering is 1 channel / 8 bpp
-    if (!TexPixelsRGBA32)
+    // Build atlas on demand
+    if (TexPixelsRGBA32 == NULL)
     {
-        unsigned char* pixels = NULL;
-        GetTexDataAsAlpha8(&pixels, NULL, NULL);
-        if (pixels)
-        {
-            TexPixelsRGBA32 = (unsigned int*)IM_ALLOC((size_t)TexWidth * (size_t)TexHeight * 4);
-            const unsigned char* src = pixels;
-            unsigned int* dst = TexPixelsRGBA32;
-            for (int n = TexWidth * TexHeight; n > 0; n--)
-                *dst++ = IM_COL32(255, 255, 255, (unsigned int)(*src++));
-        }
+        if (ConfigData.empty())
+            AddFontDefault();
+
+        Build();
     }
 
     *out_pixels = (unsigned char*)TexPixelsRGBA32;
@@ -2515,12 +2555,14 @@ static bool ImFontAtlasBuildWithStbTruetype(ImFontAtlas* atlas)
                 atlas->TexHeight = ImMax(atlas->TexHeight, src_tmp.Rects[glyph_i].y + src_tmp.Rects[glyph_i].h);
     }
 
+    unsigned char* old_8bit_ptr = nullptr;
+
     // 7. Allocate texture
     atlas->TexHeight = (atlas->Flags & ImFontAtlasFlags_NoPowerOfTwoHeight) ? (atlas->TexHeight + 1) : ImUpperPowerOfTwo(atlas->TexHeight);
     atlas->TexUvScale = ImVec2(1.0f / atlas->TexWidth, 1.0f / atlas->TexHeight);
-    atlas->TexPixelsAlpha8 = (unsigned char*)IM_ALLOC(atlas->TexWidth * atlas->TexHeight);
-    memset(atlas->TexPixelsAlpha8, 0, atlas->TexWidth * atlas->TexHeight);
-    spc.pixels = atlas->TexPixelsAlpha8;
+    old_8bit_ptr = (unsigned char*)IM_ALLOC(atlas->TexWidth * atlas->TexHeight);
+    memset(old_8bit_ptr, 0, atlas->TexWidth * atlas->TexHeight);
+    spc.pixels = old_8bit_ptr;
     spc.height = atlas->TexHeight;
 
     // 8. Render/rasterize font characters into the texture
@@ -2541,7 +2583,7 @@ static bool ImFontAtlasBuildWithStbTruetype(ImFontAtlas* atlas)
             stbrp_rect* r = &src_tmp.Rects[0];
             for (int glyph_i = 0; glyph_i < src_tmp.GlyphsCount; glyph_i++, r++)
                 if (r->was_packed)
-                    ImFontAtlasBuildMultiplyRectAlpha8(multiply_table, atlas->TexPixelsAlpha8, r->x, r->y, r->w, r->h, atlas->TexWidth * 1);
+                    ImFontAtlasBuildMultiplyRectAlpha8(multiply_table, old_8bit_ptr, r->x, r->y, r->w, r->h, atlas->TexWidth * 1);
         }
         src_tmp.Rects = NULL;
     }
@@ -2587,6 +2629,27 @@ static bool ImFontAtlasBuildWithStbTruetype(ImFontAtlas* atlas)
 
     // Cleanup
     src_tmp_array.clear_destruct();
+
+    atlas->TexPixelsNewRGBA32 = (unsigned int*)ImGui::MemAlloc(atlas->TexWidth * atlas->TexHeight * 4);
+    memset(atlas->TexPixelsNewRGBA32, 0, atlas->TexWidth * atlas->TexHeight * 4);
+
+    for (int y = 0; y < atlas->TexHeight; y++)
+    {
+        for(int x = 0; x < atlas->TexWidth; x++)
+        {
+            unsigned char val_alpha8 = old_8bit_ptr[y * atlas->TexWidth + x];
+
+            atlas->TexPixelsNewRGBA32[y * atlas->TexWidth + x] = IM_COL32(0xFF, 0xFF, 0xFF, val_alpha8);
+        }
+    }
+
+    ImGui::MemFree(old_8bit_ptr);
+
+    // TODO JAMES: investigate if i need to support both subpixel and non subpixel font
+    // In the current design, the rendering engine is told whether or not
+    // A command needs special blending support
+    // Here I am unconditionally setting issubpixelfont mode to false, aka no special support
+    atlas->IsSubpixelFont = false;
 
     ImFontAtlasBuildFinish(atlas);
     return true;
@@ -2680,7 +2743,8 @@ static void ImFontAtlasBuildRenderDefaultTexData(ImFontAtlas* atlas)
             ImFontAtlasBuildRender8bppRectFromString(atlas, x_for_white, r->Y, FONT_ATLAS_DEFAULT_TEX_DATA_W, FONT_ATLAS_DEFAULT_TEX_DATA_H, FONT_ATLAS_DEFAULT_TEX_DATA_PIXELS, '.', 0xFF);
             ImFontAtlasBuildRender8bppRectFromString(atlas, x_for_black, r->Y, FONT_ATLAS_DEFAULT_TEX_DATA_W, FONT_ATLAS_DEFAULT_TEX_DATA_H, FONT_ATLAS_DEFAULT_TEX_DATA_PIXELS, 'X', 0xFF);
         }
-        else
+
+        if (atlas->TexPixelsRGBA32 != NULL)
         {
             ImFontAtlasBuildRender32bppRectFromString(atlas, x_for_white, r->Y, FONT_ATLAS_DEFAULT_TEX_DATA_W, FONT_ATLAS_DEFAULT_TEX_DATA_H, FONT_ATLAS_DEFAULT_TEX_DATA_PIXELS, '.', IM_COL32_WHITE);
             ImFontAtlasBuildRender32bppRectFromString(atlas, x_for_black, r->Y, FONT_ATLAS_DEFAULT_TEX_DATA_W, FONT_ATLAS_DEFAULT_TEX_DATA_H, FONT_ATLAS_DEFAULT_TEX_DATA_PIXELS, 'X', IM_COL32_WHITE);
@@ -2695,7 +2759,8 @@ static void ImFontAtlasBuildRenderDefaultTexData(ImFontAtlas* atlas)
         {
             atlas->TexPixelsAlpha8[offset] = atlas->TexPixelsAlpha8[offset + 1] = atlas->TexPixelsAlpha8[offset + w] = atlas->TexPixelsAlpha8[offset + w + 1] = 0xFF;
         }
-        else
+
+        if (atlas->TexPixelsRGBA32 != NULL)
         {
             atlas->TexPixelsRGBA32[offset] = atlas->TexPixelsRGBA32[offset + 1] = atlas->TexPixelsRGBA32[offset + w] = atlas->TexPixelsRGBA32[offset + w + 1] = IM_COL32_WHITE;
         }
@@ -3537,6 +3602,22 @@ void ImFont::RenderChar(ImDrawList* draw_list, float size, ImVec2 pos, ImU32 col
 }
 
 // Note: as with every ImDrawList drawing function, this expects that the font atlas texture is bound.
+struct DrawListPadder
+{
+    ImDrawList* lst = nullptr;
+
+    void Set(ImDrawList* in)
+    {
+        lst = in;
+    }
+
+    ~DrawListPadder()
+    {
+        if(lst)
+            lst->AddDrawCmd();
+    }
+};
+
 void ImFont::RenderText(ImDrawList* draw_list, float size, ImVec2 pos, ImU32 col, const ImVec4& clip_rect, const char* text_begin, const char* text_end, float wrap_width, bool cpu_fine_clip) const
 {
     if (!text_end)
@@ -3581,6 +3662,27 @@ void ImFont::RenderText(ImDrawList* draw_list, float size, ImVec2 pos, ImU32 col
     }
     if (s == text_end)
         return;
+
+
+    ImDrawCmd* current_command = nullptr;
+
+    if(draw_list->CmdBuffer.size() > 0 && draw_list->CmdBuffer[draw_list->CmdBuffer.Size-1].UseRgbBlending && draw_list->CmdBuffer[draw_list->CmdBuffer.Size-1].RgbBlendColor == col)
+    {
+        current_command = &draw_list->CmdBuffer[draw_list->CmdBuffer.Size-1];
+    }
+
+    DrawListPadder pad;
+
+    if(current_command == nullptr)
+    {
+        draw_list->AddDrawCmd();
+
+        current_command = &draw_list->CmdBuffer[draw_list->CmdBuffer.Size-1];
+        current_command->UseRgbBlending = true;
+        current_command->RgbBlendColor = col;
+
+        pad.Set(draw_list);
+    }
 
     // Reserve vertices for remaining worse case (over-reserving is useful and easily amortized)
     const int vtx_count_max = (int)(text_end - s) * 4;
@@ -3722,7 +3824,8 @@ void ImFont::RenderText(ImDrawList* draw_list, float size, ImVec2 pos, ImU32 col
     // Give back unused vertices (clipped ones, blanks) ~ this is essentially a PrimUnreserve() action.
     draw_list->VtxBuffer.Size = (int)(vtx_write - draw_list->VtxBuffer.Data); // Same as calling shrink()
     draw_list->IdxBuffer.Size = (int)(idx_write - draw_list->IdxBuffer.Data);
-    draw_list->CmdBuffer[draw_list->CmdBuffer.Size - 1].ElemCount -= (idx_expected_size - draw_list->IdxBuffer.Size);
+    //draw_list->CmdBuffer[draw_list->CmdBuffer.Size - 1].ElemCount -= (idx_expected_size - draw_list->IdxBuffer.Size);
+    current_command->ElemCount -= (idx_expected_size - draw_list->IdxBuffer.Size);
     draw_list->_VtxWritePtr = vtx_write;
     draw_list->_IdxWritePtr = idx_write;
     draw_list->_VtxCurrentIdx = vtx_current_idx;

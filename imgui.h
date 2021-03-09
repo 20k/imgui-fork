@@ -410,8 +410,14 @@ namespace ImGui
     // Parameters stacks (shared)
     IMGUI_API void          PushFont(ImFont* font);                                         // use NULL as a shortcut to push default font
     IMGUI_API void          PopFont();
+    IMGUI_API void          SetStyleLinearColor(bool is_linear);
+    IMGUI_API bool          IsStyleLinearColor();
     IMGUI_API void          PushStyleColor(ImGuiCol idx, ImU32 col);                        // modify a style color. always use this if you modify the style after NewFrame().
     IMGUI_API void          PushStyleColor(ImGuiCol idx, const ImVec4& col);
+    IMGUI_API void          PushLinearStyleColor(ImGuiCol idx, ImU32 col);                  // converts internally to the correct color space
+    IMGUI_API void          PushLinearStyleColor(ImGuiCol idx, const ImVec4& col);
+    IMGUI_API void          PushSrgbStyleColor(ImGuiCol idx, ImU32 col);
+    IMGUI_API void          PushSrgbStyleColor(ImGuiCol idx, const ImVec4& col);
     IMGUI_API void          PopStyleColor(int count = 1);
     IMGUI_API void          PushStyleVar(ImGuiStyleVar idx, float val);                     // modify a style float variable. always use this if you modify the style after NewFrame().
     IMGUI_API void          PushStyleVar(ImGuiStyleVar idx, const ImVec2& val);             // modify a style ImVec2 variable. always use this if you modify the style after NewFrame().
@@ -438,6 +444,9 @@ namespace ImGui
     IMGUI_API ImU32         GetColorU32(const ImVec4& col);                                 // retrieve given color with style alpha applied, packed as a 32-bit value suitable for ImDrawList
     IMGUI_API ImU32         GetColorU32(ImU32 col);                                         // retrieve given color with style alpha applied, packed as a 32-bit value suitable for ImDrawList
     IMGUI_API const ImVec4& GetStyleColorVec4(ImGuiCol idx);                                // retrieve style color as stored in ImGuiStyle structure. use to feed back into PushStyleColor(), otherwise use GetColorU32() to get style color with style alpha baked in.
+    IMGUI_API ImVec4        GetLinearStyleColorVec4(ImGuiCol idx);                          // as above but guaranteed to be linear colour
+    IMGUI_API ImVec4        GetSrgbStyleColorVec4(ImGuiCol idx);                            // as above but guaranteed to be srgb colour
+
 
     // Cursor / Layout
     // - By "cursor" we mean the current output position.
@@ -912,6 +921,13 @@ namespace ImGui
     IMGUI_API ImU32         ColorConvertFloat4ToU32(const ImVec4& in);
     IMGUI_API void          ColorConvertRGBtoHSV(float r, float g, float b, float& out_h, float& out_s, float& out_v);
     IMGUI_API void          ColorConvertHSVtoRGB(float h, float s, float v, float& out_r, float& out_g, float& out_b);
+
+    // Color space helpers
+    IMGUI_API float         SrgbToLinear(float srgb_color);
+    IMGUI_API float         LinearToSrgb(float linear_color);
+
+    IMGUI_API ImVec4        SrgbToLinear(ImVec4 srgb_color);
+    IMGUI_API ImVec4        LinearToSrgb(ImVec4 linear_color);
 
     // Inputs Utilities: Keyboard
     // - For 'int user_key_index' you can use your own indices/enums according to how your backend/engine stored them in io.KeysDown[].
@@ -2393,6 +2409,9 @@ struct ImDrawCmd
     ImDrawCallback  UserCallback;       // 4-8  // If != NULL, call the function instead of rendering the vertices. clip_rect and texture_id will be set normally.
     void*           UserCallbackData;   // 4-8  // The draw callback code can access this.
 
+    bool            UseRgbBlending;     // Use rgb blending mode where rgb represent coverage, no alpha
+    ImU32           RgbBlendColor;      // Color to render
+
     ImDrawCmd() { memset(this, 0, sizeof(*this)); } // Also ensure our padding fields are zeroed
 
     // Since 1.83: returns ImTextureID associated with this draw call. Warning: DO NOT assume this is always same as 'TextureId' (we will change this function for an upcoming feature)
@@ -2800,6 +2819,7 @@ struct ImFontAtlas
     ImTextureID                 TexID;              // User data to refer to the texture once it has been uploaded to user's graphic systems. It is passed back to you during rendering via the ImDrawCmd structure.
     int                         TexDesiredWidth;    // Texture width desired by user before Build(). Must be a power-of-two. If have many glyphs your graphics API have texture size restrictions you may want to increase texture width to decrease height.
     int                         TexGlyphPadding;    // Padding between glyphs within texture in pixels. Defaults to 1. If your rendering method doesn't rely on bilinear filtering you may set this to 0.
+    bool                        IsSubpixelFont;
     bool                        Locked;             // Marked as Locked by ImGui::NewFrame() so attempt to modify the atlas will assert.
 
     // [Internal]

@@ -89,6 +89,7 @@
 #endif
 
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "imgui_impl_opengl3.h"
 #include <stdio.h>
 #if defined(_MSC_VER) && _MSC_VER <= 1500 // MSVC 2008 or earlier
@@ -142,6 +143,10 @@
 #ifdef GL_POLYGON_MODE
 #define IMGUI_IMPL_HAS_POLYGON_MODE
 #endif
+
+#ifdef __EMSCRIPTEN__
+#undef SUBPIXEL_FONT_RENDERING
+#endif // __EMSCRIPTEN__
 
 // Desktop GL 3.2+ has glDrawElementsBaseVertex() which GL ES and WebGL don't have.
 #if !defined(IMGUI_IMPL_OPENGL_ES2) && !defined(IMGUI_IMPL_OPENGL_ES3) && defined(GL_VERSION_3_2)
@@ -429,10 +434,21 @@ void    ImGui_ImplOpenGL3_RenderDrawData(ImDrawData* draw_data)
     ImVec2 clip_off = draw_data->DisplayPos;         // (0,0) unless using multi-viewports
     ImVec2 clip_scale = draw_data->FramebufferScale; // (1,1) unless using retina display which are often (2,2)
 
+    bool rgb_blend = false;
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    #ifndef __EMSCRIPTEN__
+    if(ImGui::GetCurrentContext()->IsLinearColor)
+        glEnable(GL_FRAMEBUFFER_SRGB);
+    #endif // __EMSCRIPTEN__
+
     // Render command lists
     for (int n = 0; n < draw_data->CmdListsCount; n++)
     {
         const ImDrawList* cmd_list = draw_data->CmdLists[n];
+
+        if(cmd_list->VtxBuffer.Size == 0)
+            continue;
 
         // Upload vertex/index buffers
         glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)cmd_list->VtxBuffer.Size * (int)sizeof(ImDrawVert), (const GLvoid*)cmd_list->VtxBuffer.Data, GL_STREAM_DRAW);
@@ -441,6 +457,21 @@ void    ImGui_ImplOpenGL3_RenderDrawData(ImDrawData* draw_data)
         for (int cmd_i = 0; cmd_i < cmd_list->CmdBuffer.Size; cmd_i++)
         {
             const ImDrawCmd* pcmd = &cmd_list->CmdBuffer[cmd_i];
+
+            #ifdef SUBPIXEL_FONT_RENDERING
+            if(!rgb_blend && pcmd->UseRgbBlending)
+            {
+                glBlendFunc(GL_ONE, GL_SRC1_COLOR);
+                rgb_blend = true;
+            }
+
+            if(rgb_blend && !pcmd->UseRgbBlending)
+            {
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                rgb_blend = false;
+            }
+            #endif // SUBPIXEL_FONT_RENDERING
+
             if (pcmd->UserCallback != NULL)
             {
                 // User callback, registered via ImDrawList::AddCallback()
@@ -472,6 +503,11 @@ void    ImGui_ImplOpenGL3_RenderDrawData(ImDrawData* draw_data)
             }
         }
     }
+
+    #ifndef __EMSCRIPTEN__
+    if(ImGui::GetCurrentContext()->IsLinearColor)
+        glDisable(GL_FRAMEBUFFER_SRGB);
+    #endif // __EMSCRIPTEN__
 
     // Destroy the temporary VAO
 #ifdef IMGUI_IMPL_OPENGL_USE_VERTEX_ARRAY
@@ -676,6 +712,21 @@ bool    ImGui_ImplOpenGL3_CreateDeviceObjects()
         "    gl_FragColor = Frag_Color * texture2D(Texture, Frag_UV.st);\n"
         "}\n";
 
+
+    #ifdef SUBPIXEL_FONT_RENDERING
+    const GLchar* fragment_shader_glsl_130 =
+        "uniform sampler2D Texture;\n"
+        "in vec2 Frag_UV;\n"
+        "in vec4 Frag_Color;\n"
+        "out vec4 Out_Color_0;\n"
+        "out vec4 Out_Color_1;\n"
+        "void main()\n"
+        "{\n"
+        "   vec4 tex_col4 = texture(Texture, Frag_UV.st);\n"
+        "   Out_Color_0 = Frag_Color * tex_col4;\n"
+        "   Out_Color_1 = 1 - tex_col4;\n"
+        "}\n";
+    #else
     const GLchar* fragment_shader_glsl_130 =
         "uniform sampler2D Texture;\n"
         "in vec2 Frag_UV;\n"
@@ -685,6 +736,7 @@ bool    ImGui_ImplOpenGL3_CreateDeviceObjects()
         "{\n"
         "    Out_Color = Frag_Color * texture(Texture, Frag_UV.st);\n"
         "}\n";
+    #endif // SUBPIXEL_FONT_RENDERING
 
     const GLchar* fragment_shader_glsl_300_es =
         "precision mediump float;\n"
@@ -697,6 +749,21 @@ bool    ImGui_ImplOpenGL3_CreateDeviceObjects()
         "    Out_Color = Frag_Color * texture(Texture, Frag_UV.st);\n"
         "}\n";
 
+    #ifdef SUBPIXEL_FONT_RENDERING
+    ///uses dual source blending
+    const GLchar* fragment_shader_glsl_410_core =
+        "in vec2 Frag_UV;\n"
+        "in vec4 Frag_Color;\n"
+        "uniform sampler2D Texture;\n"
+        "layout (location = 0) out vec4 Out_Color_0;\n"
+        "layout (location = 1) out vec4 Out_Color_1;\n"
+        "void main()\n"
+        "{\n"
+        "   vec4 tex_col4 = texture(Texture, Frag_UV.st);\n"
+        "   Out_Color_0 = Frag_Color * tex_col4;\n"
+        "   Out_Color_1 = 1 - tex_col4;\n"
+        "}\n";
+    #else
     const GLchar* fragment_shader_glsl_410_core =
         "in vec2 Frag_UV;\n"
         "in vec4 Frag_Color;\n"
@@ -706,6 +773,7 @@ bool    ImGui_ImplOpenGL3_CreateDeviceObjects()
         "{\n"
         "    Out_Color = Frag_Color * texture(Texture, Frag_UV.st);\n"
         "}\n";
+    #endif // SUBPIXEL_FONT_RENDERING
 
     // Select shaders matching our GLSL versions
     const GLchar* vertex_shader = NULL;

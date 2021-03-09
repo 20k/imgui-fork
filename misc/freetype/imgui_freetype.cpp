@@ -41,6 +41,14 @@
 #include FT_GLYPH_H             // <freetype/ftglyph.h>
 #include FT_SYNTHESIS_H         // <freetype/ftsynth.h>
 
+#ifdef __EMSCRIPTEN__
+#define NO_SUBPIXEL_AA
+#endif // __EMSCRIPTEN__
+
+#ifndef NO_SUBPIXEL_AA
+#include <freetype/ftlcdfil.h>
+#endif // NO_SUBPIXEL_AA
+
 #ifdef _MSC_VER
 #pragma warning (disable: 4505)     // unreferenced local function has been removed (stb stuff)
 #pragma warning (disable: 26812)    // [Static Analyzer] The enum type 'xxx' is unscoped. Prefer 'enum class' over 'enum' (Enum.3).
@@ -131,8 +139,8 @@ namespace
         void                    CloseFont();
         void                    SetPixelHeight(int pixel_height); // Change font pixel size. All following calls to RasterizeGlyph() will use this size
         const FT_Glyph_Metrics* LoadGlyph(uint32_t in_codepoint);
-        const FT_Bitmap*        RenderGlyphAndGetInfo(GlyphInfo* out_glyph_info);
-        void                    BlitGlyph(const FT_Bitmap* ft_bitmap, uint32_t* dst, uint32_t dst_pitch, unsigned char* multiply_table = NULL);
+        const FT_Bitmap*        RenderGlyphAndGetInfo(GlyphInfo* out_glyph_info, bool use_subpixel_aa);
+        void                    BlitGlyph(const FT_Bitmap* ft_bitmap, uint32_t* dst, uint32_t dst_pitch, bool use_subpixel_aa, unsigned char* multiply_table = NULL);
         ~FreeTypeFont()         { CloseFont(); }
 
         // [Internals]
@@ -172,6 +180,10 @@ namespace
             LoadFlags |= FT_LOAD_TARGET_LIGHT;
         else if (UserFlags & ImGuiFreeTypeBuilderFlags_MonoHinting)
             LoadFlags |= FT_LOAD_TARGET_MONO;
+        else if (UserFlags & ImGuiFreeTypeBuilderFlags_LCD)
+            LoadFlags |= FT_LOAD_TARGET_LCD;
+        else if (UserFlags & ImGuiFreeTypeBuilderFlags_LCD_V)
+            LoadFlags |= FT_LOAD_TARGET_LCD_V;
         else
             LoadFlags |= FT_LOAD_TARGET_NORMAL;
 
@@ -249,10 +261,16 @@ namespace
         return &slot->metrics;
     }
 
-    const FT_Bitmap* FreeTypeFont::RenderGlyphAndGetInfo(GlyphInfo* out_glyph_info)
+    const FT_Bitmap* FreeTypeFont::RenderGlyphAndGetInfo(GlyphInfo* out_glyph_info, bool use_subpixel_aa)
     {
         FT_GlyphSlot slot = Face->glyph;
-        FT_Error error = FT_Render_Glyph(slot, RenderMode);
+        FT_Error error;
+
+        if(!use_subpixel_aa)
+            error = FT_Render_Glyph(slot, FT_RENDER_MODE_NORMAL);
+        else
+            error = FT_Render_Glyph(slot, FT_RENDER_MODE_LCD);
+
         if (error != 0)
             return NULL;
 
@@ -264,10 +282,13 @@ namespace
         out_glyph_info->AdvanceX = (float)FT_CEIL(slot->advance.x);
         out_glyph_info->IsColored = (ft_bitmap->pixel_mode == FT_PIXEL_MODE_BGRA);
 
+        if(use_subpixel_aa)
+            out_glyph_info->Width /= 3;
+
         return ft_bitmap;
     }
 
-    void FreeTypeFont::BlitGlyph(const FT_Bitmap* ft_bitmap, uint32_t* dst, uint32_t dst_pitch, unsigned char* multiply_table)
+    void FreeTypeFont::BlitGlyph(const FT_Bitmap* ft_bitmap, uint32_t* dst, uint32_t dst_pitch, bool use_subpixel_aa, unsigned char* multiply_table)
     {
         IM_ASSERT(ft_bitmap != NULL);
         const uint32_t w = ft_bitmap->width;
@@ -337,6 +358,29 @@ namespace
                 #undef DE_MULTIPLY
                 break;
             }
+        case FT_PIXEL_MODE_LCD:
+        case FT_PIXEL_MODE_LCD_V:
+            {
+                assert(multiply_table == nullptr);
+
+                uint8_t* out_8 = (uint8_t*)dst;
+
+                assert(use_subpixel_aa);
+
+                for(uint32_t y=0; y < h; y++)
+                {
+                    for(uint32_t x=0; x < w/3; x++)
+                    {
+                        out_8[((y) * dst_pitch + x) * 4 + 0] = src[y * src_pitch + x*3 + 0];
+                        out_8[((y) * dst_pitch + x) * 4 + 1] = src[y * src_pitch + x*3 + 1];
+                        out_8[((y) * dst_pitch + x) * 4 + 2] = src[y * src_pitch + x*3 + 2];
+                        out_8[((y) * dst_pitch + x) * 4 + 3] = 255;
+                    }
+                }
+
+                break;
+            }
+
         default:
             IM_ASSERT(0 && "FreeTypeFont::BlitGlyph(): Unknown bitmap pixel mode!");
         }
@@ -386,9 +430,12 @@ struct ImFontBuildDstDataFT
     ImBitVector         GlyphsSet;          // This is used to resolve collision when multiple sources are merged into a same destination font.
 };
 
-bool ImFontAtlasBuildWithFreeTypeEx(FT_Library ft_library, ImFontAtlas* atlas, unsigned int extra_flags)
+bool ImFontAtlasBuildWithFreeTypeEx(FT_Library ft_library, ImFontAtlas* atlas, unsigned int extra_flags, bool use_subpixel_aa)
 {
     IM_ASSERT(atlas->ConfigData.Size > 0);
+
+    ///fairly random amount of padding to prevent bleed
+    atlas->TexGlyphPadding = 5;
 
     ImFontAtlasBuildInit(atlas);
 
@@ -539,7 +586,7 @@ bool ImFontAtlasBuildWithFreeTypeEx(FT_Library ft_library, ImFontAtlas* atlas, u
                 continue;
 
             // Render glyph into a bitmap (currently held by FreeType)
-            const FT_Bitmap* ft_bitmap = src_tmp.Font.RenderGlyphAndGetInfo(&src_glyph.Info);
+            const FT_Bitmap* ft_bitmap = src_tmp.Font.RenderGlyphAndGetInfo(&src_glyph.Info, use_subpixel_aa);
             if (ft_bitmap == NULL)
                 continue;
 
@@ -554,7 +601,7 @@ bool ImFontAtlasBuildWithFreeTypeEx(FT_Library ft_library, ImFontAtlas* atlas, u
             // Blit rasterized pixels to our temporary buffer and keep a pointer to it.
             src_glyph.BitmapData = (unsigned int*)(buf_bitmap_buffers.back() + buf_bitmap_current_used_bytes);
             buf_bitmap_current_used_bytes += bitmap_size_in_bytes;
-            src_tmp.Font.BlitGlyph(ft_bitmap, src_glyph.BitmapData, src_glyph.Info.Width, multiply_enabled ? multiply_table : NULL);
+            src_tmp.Font.BlitGlyph(ft_bitmap, src_glyph.BitmapData, src_glyph.Info.Width, use_subpixel_aa, multiply_enabled ? multiply_table : NULL);
 
             src_tmp.Rects[glyph_i].w = (stbrp_coord)(src_glyph.Info.Width + padding);
             src_tmp.Rects[glyph_i].h = (stbrp_coord)(src_glyph.Info.Height + padding);
@@ -752,8 +799,42 @@ static bool ImFontAtlasBuildWithFreeType(ImFontAtlas* atlas)
     // If you don't call FT_Add_Default_Modules() the rest of code may work, but FreeType won't use our custom allocator.
     FT_Add_Default_Modules(ft_library);
 
-    bool ret = ImFontAtlasBuildWithFreeTypeEx(ft_library, atlas, atlas->FontBuilderFlags);
+    #ifndef NO_SUBPIXEL_AA
+    FT_LcdFilter_ ft_filter_flags = FT_LCD_FILTER_NONE;
+
+    if(atlas->FontBuilderFlags & ImGuiFreeTypeBuilderFlags_FILTER_DEFAULT)
+        ft_filter_flags = FT_LCD_FILTER_DEFAULT;
+
+    if(atlas->FontBuilderFlags & ImGuiFreeTypeBuilderFlags_FILTER_LEGACY)
+        ft_filter_flags = FT_LCD_FILTER_LEGACY;
+
+    if(atlas->FontBuilderFlags & ImGuiFreeTypeBuilderFlags_FILTER_LIGHT)
+        ft_filter_flags = FT_LCD_FILTER_LIGHT;
+
+    if(atlas->FontBuilderFlags & ImGuiFreeTypeBuilderFlags_FILTER_NONE)
+        ft_filter_flags = FT_LCD_FILTER_NONE;
+
+    bool use_subpixel_aa = false;
+
+    if(atlas->FontBuilderFlags & ImGuiFreeTypeBuilderFlags_NO_SUBPIXEL_AA)
+    {
+        if(FT_Library_SetLcdFilter(ft_library, ft_filter_flags) != 0)
+            return false;
+
+        use_subpixel_aa = true;
+    }
+    else
+    {
+        use_subpixel_aa = false;
+    }
+    #else
+    bool use_subpixel_aa = false;
+    #endif
+
+    bool ret = ImFontAtlasBuildWithFreeTypeEx(ft_library, atlas, atlas->FontBuilderFlags, use_subpixel_aa);
     FT_Done_Library(ft_library);
+
+    atlas->IsSubpixelFont = use_subpixel_aa;
 
     return ret;
 }
