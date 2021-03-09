@@ -1,3 +1,6 @@
+#ifndef HEADER_DBD717D663931386
+#define HEADER_DBD717D663931386
+
 // dear imgui, v1.82 WIP
 // (internal structures/api)
 
@@ -1459,6 +1462,7 @@ struct ImGuiContext
     float                   FontSize;                           // (Shortcut) == FontBaseSize * g.CurrentWindow->FontWindowScale == window->FontSize(). Text height for current window.
     float                   FontBaseSize;                       // (Shortcut) == IO.FontGlobalScale * Font->Scale * Font->FontSize. Base text height.
     ImDrawListSharedData    DrawListSharedData;
+    bool                    IsLinearColor;
     double                  Time;
     int                     FrameCount;
     int                     FrameCountEnded;
@@ -1712,6 +1716,7 @@ struct ImGuiContext
         Font = NULL;
         FontSize = FontBaseSize = 0.0f;
         IO.Fonts = shared_font_atlas ? shared_font_atlas : IM_NEW(ImFontAtlas)();
+        IsLinearColor = false;
         Time = 0.0f;
         FrameCount = 0;
         FrameCountEnded = FrameCountPlatformEnded = FrameCountRendered = -1;
@@ -2864,3 +2869,5 @@ extern void         ImGuiTestEngineHook_Log(ImGuiContext* ctx, const char* fmt, 
 #endif
 
 #endif // #ifndef IMGUI_DISABLE
+#endif // header guard
+

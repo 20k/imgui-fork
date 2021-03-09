@@ -2452,6 +2452,24 @@ const ImVec4& ImGui::GetStyleColorVec4(ImGuiCol idx)
     return style.Colors[idx];
 }
 
+ImVec4 ImGui::GetLinearStyleColorVec4(ImGuiCol idx)
+{
+    ImGuiStyle& style = GImGui->Style;
+    if(GImGui->IsLinearColor)
+        return style.Colors[idx];
+    else
+        return SrgbToLinear(style.Colors[idx]);
+}
+
+ImVec4 ImGui::GetSrgbStyleColorVec4(ImGuiCol idx)
+{
+    ImGuiStyle& style = GImGui->Style;
+    if(GImGui->IsLinearColor)
+        return LinearToSrgb(style.Colors[idx]);
+    else
+        return style.Colors[idx];
+}
+
 ImU32 ImGui::GetColorU32(ImU32 col)
 {
     ImGuiStyle& style = GImGui->Style;
@@ -2481,6 +2499,42 @@ void ImGui::PushStyleColor(ImGuiCol idx, const ImVec4& col)
     backup.BackupValue = g.Style.Colors[idx];
     g.ColorStack.push_back(backup);
     g.Style.Colors[idx] = col;
+}
+
+void ImGui::PushSrgbStyleColor(ImGuiCol idx, ImU32 col)
+{
+    ImGuiContext& g = *GImGui;
+    if(g.IsLinearColor)
+        PushStyleColor(idx, SrgbToLinear(ColorConvertU32ToFloat4(col)));
+    else
+        PushStyleColor(idx, col);
+}
+
+void ImGui::PushSrgbStyleColor(ImGuiCol idx, const ImVec4& col)
+{
+    ImGuiContext& g = *GImGui;
+    if(g.IsLinearColor)
+        PushStyleColor(idx, SrgbToLinear(col));
+    else
+        PushStyleColor(idx, col);
+}
+
+void ImGui::PushLinearStyleColor(ImGuiCol idx, ImU32 col)
+{
+    ImGuiContext& g = *GImGui;
+    if(g.IsLinearColor)
+        PushStyleColor(idx, ColorConvertU32ToFloat4(col));
+    else
+        PushStyleColor(idx, LinearToSrgb(ColorConvertU32ToFloat4(col)));
+}
+
+void ImGui::PushLinearStyleColor(ImGuiCol idx, const ImVec4& col)
+{
+    ImGuiContext& g = *GImGui;
+    if(g.IsLinearColor)
+        PushStyleColor(idx, col);
+    else
+        PushStyleColor(idx, LinearToSrgb(col));
 }
 
 void ImGui::PopStyleColor(int count)
@@ -3985,7 +4039,7 @@ void ImGui::NewFrame()
 {
     IM_ASSERT(GImGui != NULL && "No current context. Did you call ImGui::CreateContext() and ImGui::SetCurrentContext() ?");
     ImGuiContext& g = *GImGui;
-    
+
     // Remove pending delete hooks before frame start.
     // This deferred removal avoid issues of removal while iterating the hook vector
     for (int n = g.Hooks.Size - 1; n >= 0; n--)
@@ -7055,6 +7109,7 @@ void ImGui::PushFont(ImFont* font)
     SetCurrentFont(font);
     g.FontStack.push_back(font);
     g.CurrentWindow->DrawList->PushTextureID(font->ContainerAtlas->TexID);
+    g.CurrentWindow->DrawList->AddDrawCmd();
 }
 
 void  ImGui::PopFont()
@@ -7063,6 +7118,7 @@ void  ImGui::PopFont()
     g.CurrentWindow->DrawList->PopTextureID();
     g.FontStack.pop_back();
     SetCurrentFont(g.FontStack.empty() ? GetDefaultFont() : g.FontStack.back());
+    g.CurrentWindow->DrawList->AddDrawCmd();
 }
 
 void ImGui::PushItemFlag(ImGuiItemFlags option, bool enabled)
@@ -7121,6 +7177,75 @@ void ImGui::PopTextWrapPos()
     ImGuiWindow* window = GetCurrentWindow();
     window->DC.TextWrapPos = window->DC.TextWrapPosStack.back();
     window->DC.TextWrapPosStack.pop_back();
+}
+
+
+float ImGui::SrgbToLinear(float in)
+{
+    if(in <= 0.04045)
+        return in / 12.92;
+    else
+        return pow((in + 0.055) / 1.055, 2.4);
+}
+
+float ImGui::LinearToSrgb(float C_lin)
+{
+    if (C_lin <= 0.0031308)
+        return C_lin * 12.92;
+    else
+        return 1.055 * pow(C_lin, 1.0 / 2.4) - 0.055;
+}
+
+ImVec4 ImGui::SrgbToLinear(ImVec4 col)
+{
+    col.x = SrgbToLinear(col.x);
+    col.y = SrgbToLinear(col.y);
+    col.z = SrgbToLinear(col.z);
+
+    return col;
+}
+
+ImVec4 ImGui::LinearToSrgb(ImVec4 col)
+{
+    col.x = LinearToSrgb(col.x);
+    col.y = LinearToSrgb(col.y);
+    col.z = LinearToSrgb(col.z);
+
+    return col;
+}
+
+void ImGui::SetStyleLinearColor(bool is_linear)
+{
+    ImGuiContext& g = *ImGui::GetCurrentContext();
+
+    if(is_linear == g.IsLinearColor)
+        return;
+
+    ///THIS IS PRETTY HACKY
+    ///if you toggle the setting loads you'll lose precision
+    ///this is fine because i expect that people won't toggle it a lot but still
+    ///there could be a much better solution here
+    for(int i=0; i < ImGuiCol_COUNT; i++)
+    {
+        ImVec4& col = g.Style.Colors[i];
+
+        if(is_linear)
+            col = SrgbToLinear(col);
+        else
+            col = LinearToSrgb(col);
+    }
+
+    g.IsLinearColor = is_linear;
+
+    if(is_linear)
+        ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_IsSRGB;
+    else
+        ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_IsSRGB;
+}
+
+bool ImGui::IsStyleLinearColor()
+{
+    return ImGui::GetCurrentContext()->IsLinearColor;
 }
 
 bool ImGui::IsWindowChildOf(ImGuiWindow* window, ImGuiWindow* potential_parent)
@@ -11747,7 +11872,7 @@ static void ImGui::UpdateSelectWindowViewport(ImGuiWindow* window)
     if (window->Viewport == NULL)
         if (!UpdateTryMergeWindowIntoHostViewport(window, main_viewport))
             window->Viewport = AddUpdateViewport(window, window->ID, window->Pos, window->Size, ImGuiViewportFlags_None);
-    
+
     // Mark window as allowed to protrude outside of its viewport and into the current monitor
     if (!lock_viewport)
     {
@@ -13613,7 +13738,7 @@ bool ImGui::DockNodeBeginAmendTabBar(ImGuiDockNode* node)
     PushOverrideID(node->ID);
     bool ret = BeginTabBarEx(node->TabBar, node->TabBar->BarRect, node->TabBar->Flags, node);
     IM_UNUSED(ret);
-    IM_ASSERT(ret);    
+    IM_ASSERT(ret);
     return true;
 }
 
