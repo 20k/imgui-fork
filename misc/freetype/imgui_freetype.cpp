@@ -821,11 +821,11 @@ static bool ImFontAtlasBuildWithFreeType(ImFontAtlas* atlas)
         if(FT_Library_SetLcdFilter(ft_library, ft_filter_flags) != 0)
             return false;
 
-        use_subpixel_aa = true;
+        use_subpixel_aa = false;
     }
     else
     {
-        use_subpixel_aa = false;
+        use_subpixel_aa = true;
     }
     #else
     bool use_subpixel_aa = false;
