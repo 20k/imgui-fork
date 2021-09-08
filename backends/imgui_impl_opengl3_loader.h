@@ -1,3 +1,22 @@
+//-----------------------------------------------------------------------------
+// About imgui_impl_opengl3_loader.h:
+//
+// We embed our own OpenGL loader to not require user to provide their own or to have to use ours,
+// which proved to be endless problems for users.
+// Our loader is custom-generated, based on gl3w but automatically filtered to only include
+// enums/functions that we use in our imgui_impl_opengl3.cpp source file in order to be small.
+//
+// YOU SHOULD NOT NEED TO INCLUDE/USE THIS DIRECTLY. THIS IS USED BY imgui_impl_opengl3.cpp ONLY.
+// THE REST OF YOUR APP SHOULD USE A DIFFERENT GL LOADER: ANY GL LOADER OF YOUR CHOICE.
+//
+// Regenerate with:
+//   python gl3w_gen.py --output ../imgui/backends/imgui_impl_opengl3_loader.h --ref ../imgui/backends/imgui_impl_opengl3.cpp ./extra_symbols.txt
+//
+// More info:
+//   https://github.com/dearimgui/gl3w_stripped
+//   https://github.com/ocornut/imgui/issues/4445
+//-----------------------------------------------------------------------------
+
 /*
  * This file was generated with gl3w_gen.py, part of imgl3w
  * (hosted at https://github.com/dearimgui/gl3w_stripped)
@@ -26,14 +45,11 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-// We embed our own OpenGL loader to not require user to provide their own or to have to use ours, which proved to be endless problems for users.
-// Our loader is custom-generated, based on gl3w but automatically filtered to only include enums/functions that we use in this source file.
-// Regenerate with: python gl3w_gen.py --imgui-dir /path/to/imgui/
-// see https://github.com/dearimgui/gl3w_stripped for more info.
 #ifndef __gl3w_h_
 #define __gl3w_h_
 
 // Adapted from KHR/khrplatform.h to avoid including entire file.
+#ifndef __khrplatform_h_
 typedef          float         khronos_float_t;
 typedef signed   char          khronos_int8_t;
 typedef unsigned char          khronos_uint8_t;
@@ -58,6 +74,7 @@ typedef          uint64_t      khronos_uint64_t;
 typedef signed   long long     khronos_int64_t;
 typedef unsigned long long     khronos_uint64_t;
 #endif
+#endif  // __khrplatform_h_
 
 #ifndef __gl_glcorearb_h_
 #define __gl_glcorearb_h_ 1
@@ -160,8 +177,10 @@ typedef void (APIENTRYP PFNGLCLEARPROC) (GLbitfield mask);
 typedef void (APIENTRYP PFNGLCLEARCOLORPROC) (GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
 typedef void (APIENTRYP PFNGLDISABLEPROC) (GLenum cap);
 typedef void (APIENTRYP PFNGLENABLEPROC) (GLenum cap);
+typedef void (APIENTRYP PFNGLBLENDFUNCPROC) (GLenum sfactor, GLenum dfactor);
 typedef void (APIENTRYP PFNGLPIXELSTOREIPROC) (GLenum pname, GLint param);
 typedef void (APIENTRYP PFNGLREADPIXELSPROC) (GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void *pixels);
+typedef GLenum (APIENTRYP PFNGLGETERRORPROC) (void);
 typedef void (APIENTRYP PFNGLGETINTEGERVPROC) (GLenum pname, GLint *data);
 typedef const GLubyte *(APIENTRYP PFNGLGETSTRINGPROC) (GLenum name);
 typedef GLboolean (APIENTRYP PFNGLISENABLEDPROC) (GLenum cap);
@@ -175,8 +194,10 @@ GLAPI void APIENTRY glClear (GLbitfield mask);
 GLAPI void APIENTRY glClearColor (GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
 GLAPI void APIENTRY glDisable (GLenum cap);
 GLAPI void APIENTRY glEnable (GLenum cap);
+GLAPI void APIENTRY glBlendFunc (GLenum sfactor, GLenum dfactor);
 GLAPI void APIENTRY glPixelStorei (GLenum pname, GLint param);
 GLAPI void APIENTRY glReadPixels (GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void *pixels);
+GLAPI GLenum APIENTRY glGetError (void);
 GLAPI void APIENTRY glGetIntegerv (GLenum pname, GLint *data);
 GLAPI const GLubyte *APIENTRY glGetString (GLenum name);
 GLAPI GLboolean APIENTRY glIsEnabled (GLenum cap);
@@ -333,6 +354,7 @@ GLAPI void APIENTRY glDrawElementsBaseVertex (GLenum mode, GLsizei count, GLenum
 #endif /* GL_VERSION_3_2 */
 #ifndef GL_VERSION_3_3
 #define GL_VERSION_3_3 1
+#define GL_SRC1_COLOR                     0x88F9
 #define GL_SAMPLER_BINDING                0x8919
 typedef void (APIENTRYP PFNGLBINDSAMPLERPROC) (GLuint unit, GLuint sampler);
 #ifdef GL_GLEXT_PROTOTYPES
@@ -416,7 +438,7 @@ GL3W_API GL3WglProc imgl3wGetProcAddress(const char *proc);
 
 /* gl3w internal state */
 union GL3WProcs {
-    GL3WglProc ptr[52];
+    GL3WglProc ptr[54];
     struct {
         PFNGLACTIVETEXTUREPROC           ActiveTexture;
         PFNGLATTACHSHADERPROC            AttachShader;
@@ -426,6 +448,7 @@ union GL3WProcs {
         PFNGLBINDVERTEXARRAYPROC         BindVertexArray;
         PFNGLBLENDEQUATIONPROC           BlendEquation;
         PFNGLBLENDEQUATIONSEPARATEPROC   BlendEquationSeparate;
+        PFNGLBLENDFUNCPROC               BlendFunc;
         PFNGLBLENDFUNCSEPARATEPROC       BlendFuncSeparate;
         PFNGLBUFFERDATAPROC              BufferData;
         PFNGLCLEARPROC                   Clear;
@@ -448,6 +471,7 @@ union GL3WProcs {
         PFNGLGENTEXTURESPROC             GenTextures;
         PFNGLGENVERTEXARRAYSPROC         GenVertexArrays;
         PFNGLGETATTRIBLOCATIONPROC       GetAttribLocation;
+        PFNGLGETERRORPROC                GetError;
         PFNGLGETINTEGERVPROC             GetIntegerv;
         PFNGLGETPROGRAMINFOLOGPROC       GetProgramInfoLog;
         PFNGLGETPROGRAMIVPROC            GetProgramiv;
@@ -484,6 +508,7 @@ GL3W_API extern union GL3WProcs imgl3wProcs;
 #define glBindVertexArray                imgl3wProcs.gl.BindVertexArray
 #define glBlendEquation                  imgl3wProcs.gl.BlendEquation
 #define glBlendEquationSeparate          imgl3wProcs.gl.BlendEquationSeparate
+#define glBlendFunc                      imgl3wProcs.gl.BlendFunc
 #define glBlendFuncSeparate              imgl3wProcs.gl.BlendFuncSeparate
 #define glBufferData                     imgl3wProcs.gl.BufferData
 #define glClear                          imgl3wProcs.gl.Clear
@@ -506,6 +531,7 @@ GL3W_API extern union GL3WProcs imgl3wProcs;
 #define glGenTextures                    imgl3wProcs.gl.GenTextures
 #define glGenVertexArrays                imgl3wProcs.gl.GenVertexArrays
 #define glGetAttribLocation              imgl3wProcs.gl.GetAttribLocation
+#define glGetError                       imgl3wProcs.gl.GetError
 #define glGetIntegerv                    imgl3wProcs.gl.GetIntegerv
 #define glGetProgramInfoLog              imgl3wProcs.gl.GetProgramInfoLog
 #define glGetProgramiv                   imgl3wProcs.gl.GetProgramiv
@@ -669,6 +695,7 @@ static const char *proc_names[] = {
     "glBindVertexArray",
     "glBlendEquation",
     "glBlendEquationSeparate",
+    "glBlendFunc",
     "glBlendFuncSeparate",
     "glBufferData",
     "glClear",
@@ -691,6 +718,7 @@ static const char *proc_names[] = {
     "glGenTextures",
     "glGenVertexArrays",
     "glGetAttribLocation",
+    "glGetError",
     "glGetIntegerv",
     "glGetProgramInfoLog",
     "glGetProgramiv",

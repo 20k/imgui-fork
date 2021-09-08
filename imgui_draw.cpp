@@ -2085,6 +2085,7 @@ void    ImFontAtlas::GetTexDataAsAlpha8(unsigned char** out_pixels, int* out_wid
                 }
             }
         }
+    }
 
     *out_pixels = TexPixelsAlpha8;
     if (out_width) *out_width = TexWidth;
